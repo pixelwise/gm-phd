@@ -53,12 +53,12 @@ namespace mot {
 
       birth_hypothesis.weight = 2.0 / static_cast<double>(birth_objects_number);
 
-      birth_hypothesis.state(0u) = pose_dist(e);
-      birth_hypothesis.state(1u) = pose_dist(e);
+      birth_hypothesis.state(0u) = pose_dist(e) * calibrations_.init_pose_range_spread(0) + calibrations_.init_pose_range_mean(0);
+      birth_hypothesis.state(1u) = pose_dist(e) * calibrations_.init_pose_range_spread(1) + calibrations_.init_pose_range_mean(1);
       birth_hypothesis.state(2u) = velocity_dist(e);
       birth_hypothesis.state(3u) = velocity_dist(e);
 
-      birth_hypothesis.covariance = 1.0 * StateSizeMatrix::Identity();
+      birth_hypothesis.covariance = calibrations_.init_state_covariance.asDiagonal();
 
       const auto predicted_measurement = calibrations_.observation_matrix * birth_hypothesis.state;
       const auto innovation_covariance = calibrations_.measurement_covariance + calibrations_.observation_matrix * birth_hypothesis.covariance * calibrations_.observation_matrix.transpose();
