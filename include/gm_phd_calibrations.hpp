@@ -21,6 +21,7 @@ namespace mot {
     double merging_threshold = 3.0;
     Eigen::Vector<double, measurement_size> init_pose_range_mean = {0, 0};
     Eigen::Vector<double, measurement_size> init_pose_range_spread = {10, 10};
+    Eigen::Vector<double, state_size> init_state_covariance = {1, 1, 1, 1};
   };
 } //  namespace mot
 
