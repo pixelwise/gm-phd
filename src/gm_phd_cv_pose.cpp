@@ -53,10 +53,8 @@ namespace mot {
       Hypothesis birth_hypothesis;
 
       birth_hypothesis.weight = 2.0 / static_cast<double>(birth_objects_number);
-      birth_hypothesis.state(0u) = pose_dist(e);
-      birth_hypothesis.state(1u) = pose_dist(e);
-      birth_hypothesis.state *= calibrations_.init_pose_range_spread;
-      birth_hypothesis.state += calibrations_.init_pose_range_mean;
+      birth_hypothesis.state(0u) = pose_dist(e) * calibrations_.init_pose_range_spread(0) + calibrations_.init_pose_range_mean(0);
+      birth_hypothesis.state(1u) = pose_dist(e) * calibrations_.init_pose_range_spread(1) + calibrations_.init_pose_range_mean(1);
       birth_hypothesis.state(2u) = velocity_dist(e);
       birth_hypothesis.state(3u) = velocity_dist(e);
 
