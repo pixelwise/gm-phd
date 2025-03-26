@@ -19,6 +19,8 @@ namespace mot {
 
     double truncation_threshold = 0.1;
     double merging_threshold = 3.0;
+    Eigen::Vector<double, measurement_size> init_pose_range_mean = {0, 0};
+    Eigen::Vector<double, measurement_size> init_pose_range_spread = {10, 10};
   };
 } //  namespace mot
 

@@ -6,7 +6,7 @@ namespace mot {
   std::random_device r;
   std::default_random_engine e(r());
 
-  std::uniform_real_distribution<double> pose_dist(-10.0, 10.0);
+  std::uniform_real_distribution<double> pose_dist(-1.0, 1.0);
   std::uniform_real_distribution<double> velocity_dist(-1.0, 1.0);
 
   GmPhdCvPose::GmPhdCvPose(const GmPhdCalibrations<4u, 2u> & calibrations)
@@ -52,9 +52,10 @@ namespace mot {
       Hypothesis birth_hypothesis;
 
       birth_hypothesis.weight = 2.0 / static_cast<double>(birth_objects_number);
-
       birth_hypothesis.state(0u) = pose_dist(e);
       birth_hypothesis.state(1u) = pose_dist(e);
+      birth_hypothesis.state *= calibrations_.init_pose_range_spread;
+      birth_hypothesis.state += calibrations_.init_pose_range_mean;
       birth_hypothesis.state(2u) = velocity_dist(e);
       birth_hypothesis.state(3u) = velocity_dist(e);
 
