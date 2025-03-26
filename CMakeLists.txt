@@ -26,13 +26,20 @@ add_library(${PROJECT_NAME}
 )
 
 target_include_directories(${PROJECT_NAME}
-  PUBLIC
+    PRIVATE
     include
     ${EIGEN_INCLUDE_DIR}
 )
 
 target_link_libraries(${PROJECT_NAME}
   Eigen3::Eigen
+)
+
+file(GLOB_RECURSE HEADERS "include/*.hpp")
+
+set_target_properties(${PROJECT_NAME}
+  PROPERTIES
+  PUBLIC_HEADER "${HEADERS}"
 )
 
 ###############################################
@@ -43,6 +50,30 @@ if(BUILD_EXAMPLE)
     
     add_subdirectory(example)
 endif() # BUILD_EXAMPLE
+
+install (TARGETS ${PROJECT_NAME} 
+  EXPORT ${PROJECT_NAME}Targets
+  LIBRARY DESTINATION lib
+  PUBLIC_HEADER DESTINATION include
+)
+
+install(EXPORT ${PROJECT_NAME}Targets
+    FILE ${PROJECT_NAME}Targets.cmake
+    NAMESPACE ${PROJECT_NAME}::
+    DESTINATION lib/cmake/${PROJECT_NAME}
+)
+
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+    "${PROJECT_NAME}ConfigVersion.cmake"
+    VERSION 0.1
+    COMPATIBILITY AnyNewerVersion)
+
+install(
+  FILES "${PROJECT_NAME}Config.cmake" "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+  DESTINATION lib/cmake/${PROJECT_NAME}
+)
+
 
 # ###############################################
 # ################ Unit Tests ###################
