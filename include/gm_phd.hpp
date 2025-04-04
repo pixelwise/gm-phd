@@ -8,6 +8,7 @@
 #include <ranges>
 #include <tuple>
 #include <vector>
+#include <iostream>
 
 #include <Eigen/Dense>
 
@@ -140,11 +141,7 @@ namespace mot {
       }
 
       void Predict(void) {
-        if (is_initialized_)
-          predicted_hypothesis_.clear();
-        else
-          is_initialized_ = true;
-        // PredictBirths();
+        PredictBirths();
         PredictExistingTargets();
       }
 
@@ -201,7 +198,10 @@ namespace mot {
             const auto weight = calibrations_.pd * predicted_hypothesis.hypothesis.weight * NormPdf(measurement.value, predicted_hypothesis.predicted_measurement, predicted_hypothesis.innovation_matrix);
             const auto state = predicted_hypothesis.hypothesis.state + predicted_hypothesis.kalman_gain * (measurement.value - predicted_hypothesis.predicted_measurement);
             const auto covariance = predicted_hypothesis.hypothesis.covariance;
-
+            std::cerr << "measure mean " << measurement.value << std::endl;
+            std::cerr << "predict mean " << predicted_hypothesis.predicted_measurement << std::endl;
+            std::cerr << "predict innov " << predicted_hypothesis.innovation_matrix << std::endl;
+            std::cerr << "w " << weight << std::endl;
             new_hypothesis.push_back(Hypothesis(weight, state, covariance));
           }
           // Correct weights
@@ -323,7 +323,6 @@ namespace mot {
       }
 
       double prev_timestamp_ = 0.0;
-      bool is_initialized_ = false;
       std::vector<Object> objects_;
       std::vector<Hypothesis> hypothesis_;
   };
