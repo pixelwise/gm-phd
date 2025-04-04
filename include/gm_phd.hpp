@@ -121,7 +121,6 @@ namespace mot {
         StateSizeMatrix updated_covariance;
       };
 
-      virtual Hypothesis PredictHypothesis(const Hypothesis & hypothesis) = 0;
       virtual void PrepareTransitionMatrix(void) = 0;
       virtual void PrepareProcessNoiseMatrix(void) = 0;
       virtual void PredictBirths(void) = 0;
@@ -141,6 +140,7 @@ namespace mot {
       }
 
       void Predict(void) {
+        predicted_hypothesis_.clear();
         PredictBirths();
         PredictExistingTargets();
       }
@@ -168,56 +168,26 @@ namespace mot {
         );
       }
 
+      Hypothesis PredictHypothesis(const Hypothesis & hypothesis) {
+        static Hypothesis predicted_hypothesis;
+
+        predicted_hypothesis.weight = calibrations_.ps * hypothesis.weight;
+        predicted_hypothesis.state = transition_matrix_ * hypothesis.state;
+        predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose()
+          + time_delta * process_noise_covariance_matrix_;
+
+        return predicted_hypothesis;
+      }
+
       void Update(const std::vector<Measurement> & measurements) {
-        //UpdateExistedHypothesis();
+        hypothesis_.clear();
+        UpdateExistedHypothesis();
         MakeMeasurementUpdate(measurements);
       }
 
       void UpdateExistedHypothesis(void) {
-        hypothesis_.clear();
-        std::transform(predicted_hypothesis_.begin(), predicted_hypothesis_.end(),
-          predicted_hypothesis_.begin(),
-          [this](const PredictedHypothesis & hypothesis) {
-            PredictedHypothesis updated_hypothesis = hypothesis;
-
-            updated_hypothesis.hypothesis.weight = (1.0 - calibrations_.pd) * hypothesis.hypothesis.weight;
-            updated_hypothesis.hypothesis.state = hypothesis.hypothesis.state;
-            updated_hypothesis.hypothesis.covariance = hypothesis.hypothesis.covariance;
-
-            return updated_hypothesis;
-          }
-        );
-      }
-
-      void MakeMeasurementUpdate(const std::vector<Measurement> & measurements) {
-        hypothesis_.clear();
-
-        for (const auto & measurement : measurements) {
-          std::vector<Hypothesis> new_hypothesis;
-          for (const auto & predicted_hypothesis : predicted_hypothesis_) {
-            const auto weight = calibrations_.pd * predicted_hypothesis.hypothesis.weight * NormPdf(measurement.value, predicted_hypothesis.predicted_measurement, predicted_hypothesis.innovation_matrix);
-            const auto state = predicted_hypothesis.hypothesis.state + predicted_hypothesis.kalman_gain * (measurement.value - predicted_hypothesis.predicted_measurement);
-            const auto covariance = predicted_hypothesis.hypothesis.covariance;
-            std::cerr << "measure mean " << measurement.value << std::endl;
-            std::cerr << "predict mean " << predicted_hypothesis.predicted_measurement << std::endl;
-            std::cerr << "predict innov " << predicted_hypothesis.innovation_matrix << std::endl;
-            std::cerr << "w " << weight << std::endl;
-            new_hypothesis.push_back(Hypothesis(weight, state, covariance));
-          }
-          // Correct weights
-          const auto weights_sum = std::accumulate(new_hypothesis.begin(), new_hypothesis.end(),
-            0.0,
-            [this](double sum, const Hypothesis & curr) {
-              return sum + curr.weight * (1.0 - calibrations_.pd);
-            }
-          );
-          // Normalize weight
-          for (auto & hypothesis : new_hypothesis)
-            hypothesis.weight *= ((1.0 - calibrations_.pd) / (calibrations_.kappa + weights_sum));
-          // Add new hypothesis to vector
-          hypothesis_.insert(hypothesis_.end(), new_hypothesis.begin(), new_hypothesis.end());
-        }
-        // Add prediced previously
+        for (auto& hypothesis : predicted_hypothesis_)
+          hypothesis.hypothesis.weight *= (1.0 - calibrations_.pd);
         std::transform(predicted_hypothesis_.begin(), predicted_hypothesis_.end(),
           std::back_inserter(hypothesis_),
           [](const PredictedHypothesis & predicted_hypothesis) {
@@ -226,22 +196,30 @@ namespace mot {
         );
       }
 
+      void MakeMeasurementUpdate(const std::vector<Measurement> & measurements) {
+        for (const auto & measurement : measurements) {
+          std::vector<Hypothesis> new_hypothesis;
+          double weights_sum = 0;
+          for (const auto & predicted_hypothesis : predicted_hypothesis_) {
+            const auto weight = calibrations_.pd * predicted_hypothesis.hypothesis.weight * NormPdf(measurement.value, predicted_hypothesis.predicted_measurement, predicted_hypothesis.innovation_matrix);
+            const auto state = predicted_hypothesis.hypothesis.state + predicted_hypothesis.kalman_gain * (measurement.value - predicted_hypothesis.predicted_measurement);
+            const auto covariance = predicted_hypothesis.hypothesis.covariance;
+            weights_sum += weight;
+            new_hypothesis.push_back(Hypothesis(weight, state, covariance));
+          }
+          for (auto & hypothesis : new_hypothesis)
+            hypothesis.weight *= 1 / (calibrations_.kappa + weights_sum);
+          hypothesis_.insert(hypothesis_.end(), new_hypothesis.begin(), new_hypothesis.end());
+        }
+      }
+
       void Prune(void) {
         // Select elements with weigths over turncation threshold
-        std::vector<Hypothesis> pruned_hypothesis;
-        std::copy_if(hypothesis_.begin(), hypothesis_.end(),
-          std::back_inserter(pruned_hypothesis),
-          [this](const Hypothesis & hypothesis) {
-            return hypothesis.weight >= calibrations_.truncation_threshold;
-          }
-        );
         std::vector<std::pair<Hypothesis, bool>> pruned_hypothesis_marked;
-        std::transform(pruned_hypothesis.begin(), pruned_hypothesis.end(),
-          std::back_inserter(pruned_hypothesis_marked),
-          [](const Hypothesis & hypothesis) {
-            return std::make_pair(hypothesis, false);
-          }        
-        );
+        for (auto& h : hypothesis_)
+          if (h.weight >= calibrations_.truncation_threshold)
+            pruned_hypothesis_marked.push_back({h, false});
+        std::cerr << "pruned from " << hypothesis_.size() << " down to " << pruned_hypothesis_marked.size() << " hypothesises" << std::endl;
 
         // Merge hypothesis
         std::vector<Hypothesis> merged_hypothesis;
@@ -300,7 +278,8 @@ namespace mot {
           non_merged_hypothesis_number = std::accumulate(pruned_hypothesis_marked.begin(), pruned_hypothesis_marked.end(), 0u, non_marked_hypothesis_counter);
         }
         // Set final hypothesis
-        hypothesis_ = merged_hypothesis;
+        std::cerr << "merged from " << pruned_hypothesis_marked.size() << " down to " << merged_hypothesis.size() << " hypothesises" << std::endl;
+        hypothesis_ = std::move(merged_hypothesis);
       }
 
       void ExtractObjects(void) {

@@ -30,17 +30,6 @@ namespace mot {
   {
   }
 
-  GmPhdCvPose::Hypothesis GmPhdCvPose::PredictHypothesis(const Hypothesis & hypothesis) {
-    static Hypothesis predicted_hypothesis;
-
-    predicted_hypothesis.weight = calibrations_.ps * hypothesis.weight;
-    predicted_hypothesis.state = transition_matrix_ * hypothesis.state;
-    predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose()
-      + time_delta * process_noise_covariance_matrix_;
-
-    return predicted_hypothesis;
-  }
-
   void GmPhdCvPose::PrepareTransitionMatrix(void) {
     transition_matrix_ = StateSizeMatrix::Zero();
 
