@@ -80,12 +80,9 @@ namespace mot {
 
       virtual ~GmPhd(void) = default;
 
-      void Run(const double timestamp, const std::vector<Measurement> & measurements) {
-        SetTimestamps(timestamp);
-        // Run Filter
-        Predict();
+      void Run(const double time_delta, const std::vector<Measurement> & measurements) {
+        Predict(time_delta);
         Update(measurements);
-        // Post Processing
         Prune();
         ExtractObjects();
       }
@@ -116,48 +113,17 @@ namespace mot {
 
       std::vector<PredictedHypothesis> predicted_hypothesis_;
 
-      double time_delta = 0.0;
       GmPhdCalibrations<state_size, measurement_size> calibrations_;
       StateSizeMatrix transition_matrix_ = StateSizeMatrix::Zero();
       StateSizeMatrix process_noise_covariance_matrix_ = StateSizeMatrix::Zero();
 
     private:
 
-      void AddPredictedHypothesis(Hypothesis hypothesis)
+      void Predict(double time_delta)
       {
-        const auto predicted_hypothesis = PredictHypothesis(hypothesis);
-        const auto predicted_measurement = calibrations_.observation_matrix * hypothesis.state;
-        const auto innovation_covariance = calibrations_.measurement_covariance + calibrations_.observation_matrix * hypothesis.covariance * calibrations_.observation_matrix.transpose();
-        const auto kalman_gain = hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
-        const auto predicted_covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * hypothesis.covariance;
-        predicted_hypothesis_.push_back(PredictedHypothesis(hypothesis, predicted_measurement, innovation_covariance, kalman_gain, predicted_covariance));        
-      }
-
-      void SetTimestamps(const double timestamp) {
-        if (prev_timestamp_ != 0.0)
-          time_delta = timestamp - prev_timestamp_;
-        prev_timestamp_ = timestamp;
-      }
-
-      void Predict(void) {
         predicted_hypothesis_.clear();
         PredictBirths();
-        PredictExistingTargets();
-      }
-
-      void PredictExistingTargets(void) {
-        PrepareTransitionMatrix();
-        PrepareProcessNoiseMatrix();
-        for (auto& hypothesis : hypothesis_)
-          AddPredictedHypothesis(PredictHypothesis(hypothesis));
-      }
-
-      Hypothesis PredictHypothesis(const Hypothesis & hypothesis) {
-        static Hypothesis predicted_hypothesis;
-        predicted_hypothesis.weight = calibrations_.ps * hypothesis.weight;
-        predicted_hypothesis.state = transition_matrix_ * hypothesis.state;
-        predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose() + time_delta * process_noise_covariance_matrix_;
-        return predicted_hypothesis;
+        PredictExistingTargets(time_delta);
       }
 
       void Update(const std::vector<Measurement> & measurements) {
@@ -166,31 +132,62 @@ namespace mot {
         MakeMeasurementUpdate(measurements);
       }
 
+      void PredictExistingTargets(double time_delta)
+      {
+        PrepareTransitionMatrix();
+        PrepareProcessNoiseMatrix();
+        for (auto& hypothesis : hypothesis_)
+          AddPredictedHypothesis(PredictHypothesis(hypothesis, time_delta));
+      }
+
+      void AddPredictedHypothesis(Hypothesis hypothesis)
+      {
+        const auto predicted_measurement = calibrations_.observation_matrix * hypothesis.state;
+        const auto innovation_covariance = calibrations_.measurement_covariance + calibrations_.observation_matrix * hypothesis.covariance * calibrations_.observation_matrix.transpose();
+        const auto kalman_gain = hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
+        const auto predicted_covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * hypothesis.covariance;
+        predicted_hypothesis_.push_back(PredictedHypothesis(hypothesis, predicted_measurement, innovation_covariance, kalman_gain, predicted_covariance));        
+      }
+
+      Hypothesis PredictHypothesis(const Hypothesis & hypothesis, double time_delta) {
+        static Hypothesis predicted_hypothesis;
+        predicted_hypothesis.weight = calibrations_.ps * hypothesis.weight;
+        predicted_hypothesis.state = transition_matrix_ * hypothesis.state;
+        predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose() + time_delta * process_noise_covariance_matrix_;
+        return predicted_hypothesis;
+      }
+
       void UpdateExistedHypothesis(void) {
-        for (auto& hypothesis : predicted_hypothesis_)
-          hypothesis.hypothesis.weight *= (1.0 - calibrations_.pd);
-        std::transform(predicted_hypothesis_.begin(), predicted_hypothesis_.end(),
-          std::back_inserter(hypothesis_),
-          [](const PredictedHypothesis & predicted_hypothesis) {
-            return predicted_hypothesis.hypothesis;
+        for (auto& predicted : predicted_hypothesis_)
+        {
+          double weight = predicted.hypothesis.weight * (1.0 - calibrations_.pd);
+          if (weight > calibrations_.truncation_threshold)
+          {
+            auto hypothesis = predicted.hypothesis;
+            hypothesis.weight = weight;
+            hypothesis_.push_back(hypothesis);
           }
-        );
+        }
       }
 
       void MakeMeasurementUpdate(const std::vector<Measurement> & measurements) {
+        std::vector<Hypothesis> new_hypothesises;
         for (const auto & measurement : measurements) {
-          std::vector<Hypothesis> new_hypothesis;
-          double weights_sum = 0;
+          new_hypothesises.clear();
+          double Z = 0;
           for (const auto & predicted_hypothesis : predicted_hypothesis_) {
             const auto weight = calibrations_.pd * predicted_hypothesis.hypothesis.weight * NormPdf(measurement.value, predicted_hypothesis.predicted_measurement, predicted_hypothesis.innovation_matrix);
             const auto state = predicted_hypothesis.hypothesis.state + predicted_hypothesis.kalman_gain * (measurement.value - predicted_hypothesis.predicted_measurement);
             const auto covariance = predicted_hypothesis.hypothesis.covariance;
-            weights_sum += weight;
-            new_hypothesis.push_back(Hypothesis(weight, state, covariance));
+            Z += weight;
+            new_hypothesises.push_back(Hypothesis(weight, state, covariance));
           }
-          for (auto & hypothesis : new_hypothesis)
-            hypothesis.weight *= 1 / (calibrations_.kappa + weights_sum);
-          hypothesis_.insert(hypothesis_.end(), new_hypothesis.begin(), new_hypothesis.end());
+          for (auto & hypothesis : new_hypothesises)
+          {
+            hypothesis.weight /= calibrations_.kappa + Z;
+            if (hypothesis.weight > calibrations_.truncation_threshold)
+              hypothesis_.push_back(hypothesis);
+          }
         }
       }
 
