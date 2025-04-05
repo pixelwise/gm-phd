@@ -31,42 +31,13 @@ namespace mot {
       using Measurement = ValueWithCovariance<measurement_size>;
 
       struct Hypothesis {
-        Hypothesis(const double w, const StateSizeVector s, const StateSizeMatrix c)
-        : weight{w}
-        , state{s}
-        , covariance{c} 
-        {
-        }
-
-        bool operator==(const Hypothesis & arg) {
-          return (weight == arg.weight)
-            && (state == arg.state)
-            && (covariance == arg.covariance);
-        }
-
-        double weight = 0.0;
-        StateSizeVector state = StateSizeVector::Zero();
-        StateSizeMatrix covariance = StateSizeMatrix::Zero();
+        double weight;
+        StateSizeVector state;
+        StateSizeMatrix covariance;
       };
 
       struct PredictedHypothesis {
-        PredictedHypothesis(void) = default;
-        PredictedHypothesis(const PredictedHypothesis&) = default;
-        PredictedHypothesis(PredictedHypothesis&&) = default;
-        PredictedHypothesis & operator=(const PredictedHypothesis&) = default;
-        PredictedHypothesis(const Hypothesis h,
-          const MeasurementSizeVector pm,
-          const MeasurementSizeMatrix im,
-          const Eigen::Matrix<double, state_size, measurement_size> kg,
-          const StateSizeMatrix uc)
-          : hypothesis{h}
-          , predicted_measurement{pm}
-          , innovation_matrix{im}
-          , kalman_gain{kg}
-          , updated_covariance{uc} {}
-
         Hypothesis hypothesis;
-
         MeasurementSizeVector predicted_measurement;
         MeasurementSizeMatrix innovation_matrix;
         Eigen::Matrix<double, state_size, measurement_size> kalman_gain;
