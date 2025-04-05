@@ -133,30 +133,52 @@ namespace mot {
 
       void MakeMeasurementUpdate(const std::vector<Measurement> & measurements) {
         std::vector<Hypothesis> new_hypothesises;
+        const size_t n = predicted_hypothesis_.size();
+        std::vector<float> weights(n);
         for (const auto & measurement : measurements) {
           new_hypothesises.clear();
           float_type_t Z = 0;
-          float_type_t max_weight = 0;
-          for (const auto & predicted_hypothesis : predicted_hypothesis_) {
-            const auto predicted_measurement = calibrations_.observation_matrix * predicted_hypothesis.state;
-            const auto predicted_covariance = measurement.covariance + calibrations_.observation_matrix * predicted_hypothesis.covariance * calibrations_.observation_matrix.transpose();
-            const auto weight = calibrations_.pd * predicted_hypothesis.weight * NormPdf(measurement.value, predicted_measurement, predicted_covariance);
-            Z += weight;
-            const auto innovation = measurement.value - calibrations_.observation_matrix * predicted_hypothesis.state;
-            const auto innovation_covariance = measurement.covariance + calibrations_.observation_matrix * predicted_hypothesis.covariance * calibrations_.observation_matrix.transpose();
-            const auto kalman_gain = predicted_hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
-            const auto state = predicted_hypothesis.state + kalman_gain * innovation;
-            const auto covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * predicted_hypothesis.covariance;
-            new_hypothesises.push_back(Hypothesis(weight, state, covariance));
-            max_weight = std::max(max_weight, weight);
-          }
-          for (auto & hypothesis : new_hypothesises)
+          for (size_t i = 0; i < n; ++i)
           {
-            hypothesis.weight /= calibrations_.kappa + Z;
-            if (hypothesis.weight > calibrations_.truncation_threshold)
-              hypothesises_.push_back(hypothesis);
+            auto& prediction = predicted_hypothesis_[i];
+            weights[i] = DetectionWeight(prediction, measurement);
+            Z += weights[i];
           }
+          double H = 0;
+          size_t n_assigned = 0;
+          for (size_t i = 0; i < n; ++i)
+          {
+            auto weight = weights[i]; 
+            auto p = double(weight) / Z;
+            if (p > 1e-10)
+              H -= p * std::log(p);
+            weight /= calibrations_.kappa + Z;
+            if (weight > calibrations_.truncation_threshold)
+            {
+              n_assigned++;
+              auto& prediction = predicted_hypothesis_[i];
+              hypothesises_.push_back(KalmanUpdatedHypothesis(prediction, measurement, weight));
+            }
+          }
+          std::cerr << "measurement assignment entropy " << H << " <n> " << std::exp(H) << " n " << n_assigned << std::endl;
         }
+      }
+
+      float DetectionWeight(const Hypothesis& prediction, const Measurement& measurement)
+      {
+        const auto predicted_measurement = calibrations_.observation_matrix * prediction.state;
+        const auto predicted_covariance = measurement.covariance + calibrations_.observation_matrix * prediction.covariance * calibrations_.observation_matrix.transpose();
+        const auto weight = calibrations_.pd * prediction.weight * NormPdf(measurement.value, predicted_measurement, predicted_covariance);        
+      }
+
+      Hypothesis KalmanUpdatedHypothesis(const Hypothesis& prediction, const Measurement& measurement, float weight) const
+      {
+        const auto innovation = measurement.value - calibrations_.observation_matrix * prediction.state;
+        const auto innovation_covariance = measurement.covariance + calibrations_.observation_matrix * prediction.covariance * calibrations_.observation_matrix.transpose();
+        const auto kalman_gain = prediction.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
+        const auto state = prediction.state + kalman_gain * innovation;
+        const auto covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * prediction.covariance;
+        return Hypothesis(weight, state, covariance);
       }
 
       void Prune(void)
