@@ -92,6 +92,9 @@ namespace mot {
 
     private:
 
+      enum class merging_state_t {unmerged, merging, merged};
+      using merge_candidate_t = std::pair<Hypothesis, merging_state_t>;
+
       void PredictExistingTargets(double time_delta)
       {
         PrepareTransitionMatrix(time_delta);
@@ -151,62 +154,72 @@ namespace mot {
         }
       }
 
-      void Prune(void) {
-        // Select elements with weigths over turncation threshold
-        enum class mark_t {unmerged, merging, merged};
-        std::vector<std::pair<Hypothesis, mark_t>> pruned_hypothesis_marked;
+      void Prune(void)
+      {
+        auto merge_candidates = GetMergeCandidates();
+        hypothesis_.clear();
+        while (SelectMergeSet(merge_candidates))
+        {
+          hypothesis_.push_back(MergeSelected(merge_candidates));
+          MarkMerged(merge_candidates);
+        }
+        std::cerr << "merged from " << merge_candidates.size() << " down to " << hypothesis_.size() << " hypothesises" << std::endl;
+      }
+
+      std::vector<merge_candidate_t> GetMergeCandidates()
+      {
+        std::vector<merge_candidate_t> merge_candidates;
         for (auto& h : hypothesis_)
           if (h.weight >= calibrations_.truncation_threshold)
-            pruned_hypothesis_marked.push_back({h, mark_t::unmerged});
-        std::vector<Hypothesis> merged_hypothesises;
-        while (
-          std::ranges::count_if(
-            pruned_hypothesis_marked,
-            [](auto& marked_hypothesis){return marked_hypothesis.second == mark_t::unmerged;}
-          )
-        ) {
-          auto unmerged_hypothesises = pruned_hypothesis_marked | std::views::filter([](auto& marked_hypothesis) { return marked_hypothesis.second == mark_t::unmerged; });
+            merge_candidates.push_back({h, merging_state_t::unmerged});
+        return merge_candidates;
+      }
+
+      bool SelectMergeSet(std::vector<merge_candidate_t>& candidates)
+      {
+          auto unmerged_candidates = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::unmerged;});
+          if (std::ranges::empty(unmerged_candidates))
+            return false;
           const auto maximum_weight_hypothesis = *std::ranges::max_element(
-            unmerged_hypothesises,
+            unmerged_candidates,
             [](const auto& a, const auto& b) {
               return a.first.weight < b.first.weight;
             }
           );
 
-          for (auto& [hypothesis, mark] : pruned_hypothesis_marked)
-            if (mark == mark_t::unmerged)
-            {
-              const auto diff = hypothesis.state - maximum_weight_hypothesis.first.state;
-              const auto distance_matrix = diff.transpose() * hypothesis.covariance.inverse() * diff;
-              if (distance_matrix(0) < calibrations_.merging_threshold)
-                mark = mark_t::merging;
-            }
+          for (auto& [hypothesis, mark] : unmerged_candidates)
+          {
+            const auto diff = hypothesis.state - maximum_weight_hypothesis.first.state;
+            const auto distance_matrix = diff.transpose() * hypothesis.covariance.inverse() * diff;
+            if (distance_matrix(0) < calibrations_.merging_threshold)
+              mark = merging_state_t::merging;
+          }
+          return true;
+      }
 
-          // Calculate new merged element
-          double merged_weight = 0;
-          for (auto& [hypothesis, mark] : pruned_hypothesis_marked)
-            if (mark == mark_t::merging)
-              merged_weight += hypothesis.weight;          
-          StateSizeVector merged_state = StateSizeVector::Zero();
-          for (auto& [hypothesis, mark] : pruned_hypothesis_marked)
-            if (mark == mark_t::merging)
-              merged_state += (hypothesis.weight * hypothesis.state) / merged_weight;
-          StateSizeMatrix merged_covariance = StateSizeMatrix::Zero();
-          for (auto& [hypothesis, mark] : pruned_hypothesis_marked)
-            if (mark == mark_t::merging)
-            {
-              const auto diff = merged_state - hypothesis.state;
-              merged_covariance += (hypothesis.covariance + diff * diff.transpose()) / merged_weight;
-            }
-          merged_hypothesises.push_back(Hypothesis(merged_weight, merged_state, merged_covariance));
-
-          for (auto& [hypothesis, mark] : pruned_hypothesis_marked)
-            if (mark == mark_t::merging)
-              mark = mark_t::merged;
+      Hypothesis MergeSelected(std::vector<merge_candidate_t>& candidates)
+      {
+        auto merge_set = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::merging;});
+        double merged_weight = 0;
+        for (auto& [hypothesis, mark] : merge_set)
+          merged_weight += hypothesis.weight;          
+        StateSizeVector merged_state = StateSizeVector::Zero();
+        for (auto& [hypothesis, mark] : merge_set)
+          merged_state += (hypothesis.weight * hypothesis.state) / merged_weight;
+        StateSizeMatrix merged_covariance = StateSizeMatrix::Zero();
+        for (auto& [hypothesis, mark] : merge_set)
+        {
+          const auto diff = merged_state - hypothesis.state;
+          merged_covariance += (hypothesis.covariance + diff * diff.transpose()) / merged_weight;
         }
-        // Set final hypothesis
-        std::cerr << "merged from " << pruned_hypothesis_marked.size() << " down to " << merged_hypothesises.size() << " hypothesises" << std::endl;
-        hypothesis_ = std::move(merged_hypothesises);
+        return Hypothesis(merged_weight, merged_state, merged_covariance);
+      }
+
+      void MarkMerged(std::vector<merge_candidate_t>& candidates)
+      {
+          for (auto& [hypothesis, mark] : candidates)
+            if (mark == merging_state_t::merging)
+              mark = merging_state_t::merged;        
       }
 
       void ExtractObjects(void) {
