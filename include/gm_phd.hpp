@@ -19,6 +19,7 @@ namespace mot {
   template <size_t state_size, size_t measurement_size>
   class GmPhd {
     public:
+
       using StateSizeVector = Eigen::Vector<double, state_size>;
       using StateSizeMatrix = Eigen::Matrix<double, state_size, state_size>;
       using MeasurementSizeVector = Eigen::Vector<double, measurement_size>;
@@ -29,53 +30,6 @@ namespace mot {
       using Object = ValueWithCovariance<state_size>;
       using Measurement = ValueWithCovariance<measurement_size>;
 
-    public:
-      explicit GmPhd(const GmPhdCalibrations<state_size, measurement_size> & calibrations)
-        : calibrations_{calibrations} {}
-
-      virtual ~GmPhd(void) = default;
-
-      void Run(const double timestamp, const std::vector<Measurement> & measurements) {
-        SetTimestamps(timestamp);
-        // Run Filter
-        Predict();
-        Update(measurements);
-        // Post Processing
-        Prune();
-        ExtractObjects();
-      }
-
-      void MoveSensor(const SensorPoseVector & sensor_pose_delta, const SensorPoseMatrix & sensor_pose_delta_covariance) {
-        std::ignore = sensor_pose_delta;
-        std::ignore = sensor_pose_delta_covariance;
-
-        std::transform(hypothesis_.begin(), hypothesis_.end(),
-          hypothesis_.begin(),
-          [sensor_pose_delta,sensor_pose_delta_covariance](const Hypothesis & hypothesis) {
-            const auto dx = hypothesis.state(0) - sensor_pose_delta(0);
-            const auto dy = hypothesis.state(1) - sensor_pose_delta(1);
-            const auto cos_dyaw = std::cos(sensor_pose_delta(2));
-            const auto sin_dyaw = std::sin(sensor_pose_delta(2));
-            hypothesis.state(0) = cos_dyaw * dx - sin_dyaw * dy;
-            hypothesis.state(1) = sin_dyaw * dx + cos_dyaw * dy;
-          }
-        );
-      }
-
-      const std::vector<Object> & GetObjects(void) const {
-        return objects_;
-      }
-
-      double GetWeightsSum(void) const {
-        return std::accumulate(hypothesis_.begin(), hypothesis_.end(),
-          0.0,
-          [](double sum, const Hypothesis & hypothesis) {
-            return sum + hypothesis.weight;
-          }
-        );
-      }
-
-    protected:
       struct Hypothesis {
         Hypothesis(void) = default;
         Hypothesis(const Hypothesis&) = default;
@@ -121,6 +75,41 @@ namespace mot {
         StateSizeMatrix updated_covariance;
       };
 
+      explicit GmPhd(const GmPhdCalibrations<state_size, measurement_size> & calibrations)
+        : calibrations_{calibrations} {}
+
+      virtual ~GmPhd(void) = default;
+
+      void Run(const double timestamp, const std::vector<Measurement> & measurements) {
+        SetTimestamps(timestamp);
+        // Run Filter
+        Predict();
+        Update(measurements);
+        // Post Processing
+        Prune();
+        ExtractObjects();
+      }
+
+      const std::vector<Object> & GetObjects(void) const {
+        return objects_;
+      }
+
+      double GetWeightsSum(void) const {
+        return std::accumulate(hypothesis_.begin(), hypothesis_.end(),
+          0.0,
+          [](double sum, const Hypothesis & hypothesis) {
+            return sum + hypothesis.weight;
+          }
+        );
+      }
+
+      void Spawn(Hypothesis birth_hypothesis)
+      {
+        AddPredictedHypothesis(birth_hypothesis);
+      }
+
+    protected:
+
       virtual void PrepareTransitionMatrix(void) = 0;
       virtual void PrepareProcessNoiseMatrix(void) = 0;
       virtual void PredictBirths(void) = 0;
@@ -133,6 +122,17 @@ namespace mot {
       StateSizeMatrix process_noise_covariance_matrix_ = StateSizeMatrix::Zero();
 
     private:
+
+      void AddPredictedHypothesis(Hypothesis hypothesis)
+      {
+        const auto predicted_hypothesis = PredictHypothesis(hypothesis);
+        const auto predicted_measurement = calibrations_.observation_matrix * hypothesis.state;
+        const auto innovation_covariance = calibrations_.measurement_covariance + calibrations_.observation_matrix * hypothesis.covariance * calibrations_.observation_matrix.transpose();
+        const auto kalman_gain = hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
+        const auto predicted_covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * hypothesis.covariance;
+        predicted_hypothesis_.push_back(PredictedHypothesis(hypothesis, predicted_measurement, innovation_covariance, kalman_gain, predicted_covariance));        
+      }
+
       void SetTimestamps(const double timestamp) {
         if (prev_timestamp_ != 0.0)
           time_delta = timestamp - prev_timestamp_;
@@ -146,36 +146,17 @@ namespace mot {
       }
 
       void PredictExistingTargets(void) {
-        // Prepare for prediction 
         PrepareTransitionMatrix();
         PrepareProcessNoiseMatrix();
-        // Predict
-        std::transform(hypothesis_.begin(), hypothesis_.end(),
-          std::back_inserter(predicted_hypothesis_),
-          [this](const Hypothesis & hypothesis) {
-            const auto predicted_state = PredictHypothesis(hypothesis);
-
-            const auto predicted_measurement = calibrations_.observation_matrix * hypothesis.state;
-            const auto innovation_covariance = calibrations_.measurement_covariance
-              + calibrations_.observation_matrix * hypothesis.covariance * calibrations_.observation_matrix.transpose();
-            const auto kalman_gain = hypothesis.covariance * calibrations_.observation_matrix.transpose()
-              * innovation_covariance.inverse();
-            const auto predicted_covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix)
-              * hypothesis.covariance;
-
-            return PredictedHypothesis(predicted_state, predicted_measurement, innovation_covariance, kalman_gain, predicted_covariance);
-          }
-        );
+        for (auto& hypothesis : hypothesis_)
+          AddPredictedHypothesis(PredictHypothesis(hypothesis));
       }
 
       Hypothesis PredictHypothesis(const Hypothesis & hypothesis) {
         static Hypothesis predicted_hypothesis;
-
         predicted_hypothesis.weight = calibrations_.ps * hypothesis.weight;
         predicted_hypothesis.state = transition_matrix_ * hypothesis.state;
-        predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose()
-          + time_delta * process_noise_covariance_matrix_;
-
+        predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose() + time_delta * process_noise_covariance_matrix_;
         return predicted_hypothesis;
       }
 
