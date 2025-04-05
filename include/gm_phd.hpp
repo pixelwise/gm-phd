@@ -7,7 +7,6 @@
 #include <numeric>
 #include <optional>
 #include <ranges>
-#include <tuple>
 #include <vector>
 #include <iostream>
 
@@ -60,7 +59,7 @@ namespace mot {
       }
 
       float_type_t GetWeightsSum(void) const {
-        return std::accumulate(hypothesis_.begin(), hypothesis_.end(),
+        return std::accumulate(hypothesises_.begin(), hypothesises_.end(),
           0.0,
           [](float_type_t sum, const Hypothesis & hypothesis) {
             return sum + hypothesis.weight;
@@ -73,6 +72,11 @@ namespace mot {
         AddPredictedHypothesis(birth_hypothesis);
       }
 
+      void Reset()
+      {
+        hypothesises_.clear();
+      }
+
     protected:
 
       virtual void PrepareTransitionMatrix(float_type_t time_delta) = 0;
@@ -83,6 +87,8 @@ namespace mot {
       GmPhdCalibrations<state_size, measurement_size> calibrations_;
       StateSizeMatrix transition_matrix_ = StateSizeMatrix::Zero();
       StateSizeMatrix process_noise_covariance_matrix_ = StateSizeMatrix::Zero();
+      std::vector<Object> objects_;
+      std::vector<Hypothesis> hypothesises_;
 
     private:
 
@@ -94,9 +100,9 @@ namespace mot {
         predicted_hypothesis_.clear();
         PrepareTransitionMatrix(time_delta);
         PrepareProcessNoiseMatrix();
-        for (auto& hypothesis : hypothesis_)
+        for (auto& hypothesis : hypothesises_)
           AddPredictedHypothesis(PredictHypothesis(hypothesis, time_delta));
-        hypothesis_.clear();
+        hypothesises_.clear();
       }
 
       void AddPredictedHypothesis(Hypothesis hypothesis)
@@ -120,7 +126,7 @@ namespace mot {
           {
             auto hypothesis = predicted;
             hypothesis.weight = weight;
-            hypothesis_.push_back(hypothesis);
+            hypothesises_.push_back(hypothesis);
           }
         }
       }
@@ -148,7 +154,7 @@ namespace mot {
           {
             hypothesis.weight /= calibrations_.kappa + Z;
             if (hypothesis.weight > calibrations_.truncation_threshold)
-              hypothesis_.push_back(hypothesis);
+              hypothesises_.push_back(hypothesis);
           }
         }
       }
@@ -156,19 +162,19 @@ namespace mot {
       void Prune(void)
       {
         auto merge_candidates = GetMergeCandidates();
-        hypothesis_.clear();
+        hypothesises_.clear();
         while (SelectMergeSet(merge_candidates))
         {
-          hypothesis_.push_back(MergeSelected(merge_candidates));
+          hypothesises_.push_back(MergeSelected(merge_candidates));
           MarkMerged(merge_candidates);
         }
-        std::cerr << "merged from " << merge_candidates.size() << " down to " << hypothesis_.size() << " hypothesises" << std::endl;
+        std::cerr << "merged " << merge_candidates.size() << " -> " << hypothesises_.size() << std::endl;
       }
 
       std::vector<merge_candidate_t> GetMergeCandidates()
       {
         std::vector<merge_candidate_t> merge_candidates;
-        for (auto& h : hypothesis_)
+        for (auto& h : hypothesises_)
           if (h.weight >= calibrations_.truncation_threshold)
             merge_candidates.push_back({h, merging_state_t::unmerged});
         return merge_candidates;
@@ -239,8 +245,8 @@ namespace mot {
 
       void ExtractObjects(void) {
         objects_.clear();
-        for (const auto & hypothesis : hypothesis_) {
-          if (hypothesis.weight > 0.5) {
+        for (const auto & hypothesis : hypothesises_) {
+          if (hypothesis.weight > calibrations_.extraction_threshold) {
             Object object;
             object.value = hypothesis.state;
             object.covariance = hypothesis.covariance;
@@ -256,9 +262,6 @@ namespace mot {
         return c * e;
       }
 
-      float_type_t prev_timestamp_ = 0.0;
-      std::vector<Object> objects_;
-      std::vector<Hypothesis> hypothesis_;
   };
 };  //  namespace mot
 

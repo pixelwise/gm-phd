@@ -18,6 +18,7 @@ namespace mot {
 
     float truncation_threshold = 0.1;
     float merging_threshold = 3.0;
+    float extraction_threshold = 3.0;
   };
 } //  namespace mot
 
