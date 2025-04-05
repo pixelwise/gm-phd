@@ -15,9 +15,9 @@ namespace mot {
 
     protected:
 
-      void PrepareTransitionMatrix(void);
-      void PrepareProcessNoiseMatrix(void);
-      void PredictBirths(void);
+      void PrepareTransitionMatrix(double time_delta) override;
+      void PrepareProcessNoiseMatrix(void) override;
+      void PredictBirths(void) override;
 
     private:
       std::random_device _rand_device;
@@ -32,7 +32,8 @@ namespace mot {
   {
   }
 
-  inline void GmPhdCvPose::PrepareTransitionMatrix(void) {
+  inline void GmPhdCvPose::PrepareTransitionMatrix(double time_delta)
+  {
     transition_matrix_ = StateSizeMatrix::Zero();
 
     transition_matrix_(0u, 0u) = 1.0;
@@ -56,14 +57,13 @@ namespace mot {
   inline void GmPhdCvPose::PredictBirths(void) {
     constexpr auto birth_objects_number = 100u;
     for (auto index = 0; index < birth_objects_number; index++) {
-      Hypothesis birth_hypothesis;
-      birth_hypothesis.weight = 2.0 / static_cast<double>(birth_objects_number);
-      birth_hypothesis.state(0u) = _pose_dist(_rand_engine) * calibrations_.init_pose_range_spread(0) + calibrations_.init_pose_range_mean(0);
-      birth_hypothesis.state(1u) = _pose_dist(_rand_engine) * calibrations_.init_pose_range_spread(1) + calibrations_.init_pose_range_mean(1);
-      birth_hypothesis.state(2u) = _velocity_dist(_rand_engine);
-      birth_hypothesis.state(3u) = _velocity_dist(_rand_engine);
-      birth_hypothesis.covariance = calibrations_.init_state_covariance.asDiagonal();
-      Spawn(birth_hypothesis);
+      double weight = 2.0 / static_cast<double>(birth_objects_number);
+      StateSizeVector state;
+      state(0u) = _pose_dist(_rand_engine) * calibrations_.init_pose_range_spread(0) + calibrations_.init_pose_range_mean(0);
+      state(1u) = _pose_dist(_rand_engine) * calibrations_.init_pose_range_spread(1) + calibrations_.init_pose_range_mean(1);
+      state(2u) = _velocity_dist(_rand_engine);
+      state(3u) = _velocity_dist(_rand_engine);
+      Spawn(Hypothesis{weight, state, calibrations_.init_state_covariance.asDiagonal()});
     }
   }
 } //  namespace mot

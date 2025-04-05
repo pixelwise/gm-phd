@@ -31,14 +31,12 @@ namespace mot {
       using Measurement = ValueWithCovariance<measurement_size>;
 
       struct Hypothesis {
-        Hypothesis(void) = default;
-        Hypothesis(const Hypothesis&) = default;
-        Hypothesis(Hypothesis&&) = default;
-        Hypothesis & operator=(const Hypothesis&) = default;
         Hypothesis(const double w, const StateSizeVector s, const StateSizeMatrix c)
-          : weight{w}
-          , state{s}
-          , covariance{c} {}
+        : weight{w}
+        , state{s}
+        , covariance{c} 
+        {
+        }
 
         bool operator==(const Hypothesis & arg) {
           return (weight == arg.weight)
@@ -107,7 +105,7 @@ namespace mot {
 
     protected:
 
-      virtual void PrepareTransitionMatrix(void) = 0;
+      virtual void PrepareTransitionMatrix(double time_delta) = 0;
       virtual void PrepareProcessNoiseMatrix(void) = 0;
       virtual void PredictBirths(void) = 0;
 
