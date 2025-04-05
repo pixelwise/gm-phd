@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <ranges>
 #include <tuple>
 #include <vector>
@@ -19,29 +20,21 @@ namespace mot {
   template <size_t state_size, size_t measurement_size>
   class GmPhd {
     public:
-
-      using StateSizeVector = Eigen::Vector<double, state_size>;
-      using StateSizeMatrix = Eigen::Matrix<double, state_size, state_size>;
-      using MeasurementSizeVector = Eigen::Vector<double, measurement_size>;
-      using MeasurementSizeMatrix = Eigen::Matrix<double, measurement_size, measurement_size>;
-      using SensorPoseVector = Eigen::Vector<double, 3u>;
-      using SensorPoseMatrix = Eigen::Matrix<double, 3u, 3u>;
+      using float_type_t = float;
+      using StateSizeVector = Eigen::Vector<float_type_t, state_size>;
+      using StateSizeMatrix = Eigen::Matrix<float_type_t, state_size, state_size>;
+      using MeasurementSizeVector = Eigen::Vector<float_type_t, measurement_size>;
+      using MeasurementSizeMatrix = Eigen::Matrix<float_type_t, measurement_size, measurement_size>;
+      using SensorPoseVector = Eigen::Vector<float_type_t, 3u>;
+      using SensorPoseMatrix = Eigen::Matrix<float_type_t, 3u, 3u>;
 
       using Object = ValueWithCovariance<state_size>;
       using Measurement = ValueWithCovariance<measurement_size>;
 
       struct Hypothesis {
-        double weight;
+        float_type_t weight;
         StateSizeVector state;
         StateSizeMatrix covariance;
-      };
-
-      struct PredictedHypothesis {
-        Hypothesis hypothesis;
-        MeasurementSizeVector predicted_measurement;
-        MeasurementSizeMatrix innovation_matrix;
-        Eigen::Matrix<double, state_size, measurement_size> kalman_gain;
-        StateSizeMatrix updated_covariance;
       };
 
       explicit GmPhd(const GmPhdCalibrations<state_size, measurement_size> & calibrations)
@@ -49,12 +42,14 @@ namespace mot {
 
       virtual ~GmPhd(void) = default;
 
-      void Run(const double time_delta, const std::vector<Measurement> & measurements) {
-        predicted_hypothesis_.clear();
+      void Predict(const float_type_t time_delta)
+      {
         PredictExistingTargets(time_delta);
-        hypothesis_.clear();
         UpdateExistedHypothesis();
-        PredictBirths();
+      }
+
+      void Update(const std::vector<Measurement> & measurements)
+      {
         MakeMeasurementUpdate(measurements);
         Prune();
         ExtractObjects();
@@ -64,10 +59,10 @@ namespace mot {
         return objects_;
       }
 
-      double GetWeightsSum(void) const {
+      float_type_t GetWeightsSum(void) const {
         return std::accumulate(hypothesis_.begin(), hypothesis_.end(),
           0.0,
-          [](double sum, const Hypothesis & hypothesis) {
+          [](float_type_t sum, const Hypothesis & hypothesis) {
             return sum + hypothesis.weight;
           }
         );
@@ -80,11 +75,10 @@ namespace mot {
 
     protected:
 
-      virtual void PrepareTransitionMatrix(double time_delta) = 0;
+      virtual void PrepareTransitionMatrix(float_type_t time_delta) = 0;
       virtual void PrepareProcessNoiseMatrix(void) = 0;
-      virtual void PredictBirths(void) = 0;
 
-      std::vector<PredictedHypothesis> predicted_hypothesis_;
+      std::vector<Hypothesis> predicted_hypothesis_;
 
       GmPhdCalibrations<state_size, measurement_size> calibrations_;
       StateSizeMatrix transition_matrix_ = StateSizeMatrix::Zero();
@@ -95,24 +89,22 @@ namespace mot {
       enum class merging_state_t {unmerged, merging, merged};
       using merge_candidate_t = std::pair<Hypothesis, merging_state_t>;
 
-      void PredictExistingTargets(double time_delta)
+      void PredictExistingTargets(float_type_t time_delta)
       {
+        predicted_hypothesis_.clear();
         PrepareTransitionMatrix(time_delta);
         PrepareProcessNoiseMatrix();
         for (auto& hypothesis : hypothesis_)
           AddPredictedHypothesis(PredictHypothesis(hypothesis, time_delta));
+        hypothesis_.clear();
       }
 
       void AddPredictedHypothesis(Hypothesis hypothesis)
       {
-        const auto predicted_measurement = calibrations_.observation_matrix * hypothesis.state;
-        const auto innovation_covariance = calibrations_.measurement_covariance + calibrations_.observation_matrix * hypothesis.covariance * calibrations_.observation_matrix.transpose();
-        const auto kalman_gain = hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
-        const auto predicted_covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * hypothesis.covariance;
-        predicted_hypothesis_.push_back(PredictedHypothesis(hypothesis, predicted_measurement, innovation_covariance, kalman_gain, predicted_covariance));        
+        predicted_hypothesis_.push_back(hypothesis);        
       }
 
-      Hypothesis PredictHypothesis(const Hypothesis & hypothesis, double time_delta) {
+      Hypothesis PredictHypothesis(const Hypothesis & hypothesis, float_type_t time_delta) {
         return Hypothesis{
           calibrations_.ps * hypothesis.weight,
           transition_matrix_ * hypothesis.state,
@@ -123,10 +115,10 @@ namespace mot {
       void UpdateExistedHypothesis(void) {
         for (auto& predicted : predicted_hypothesis_)
         {
-          double weight = predicted.hypothesis.weight * (1.0 - calibrations_.pd);
+          float_type_t weight = predicted.weight * (1.0 - calibrations_.pd);
           if (weight > calibrations_.truncation_threshold)
           {
-            auto hypothesis = predicted.hypothesis;
+            auto hypothesis = predicted;
             hypothesis.weight = weight;
             hypothesis_.push_back(hypothesis);
           }
@@ -137,13 +129,20 @@ namespace mot {
         std::vector<Hypothesis> new_hypothesises;
         for (const auto & measurement : measurements) {
           new_hypothesises.clear();
-          double Z = 0;
+          float_type_t Z = 0;
+          float_type_t max_weight = 0;
           for (const auto & predicted_hypothesis : predicted_hypothesis_) {
-            const auto weight = calibrations_.pd * predicted_hypothesis.hypothesis.weight * NormPdf(measurement.value, predicted_hypothesis.predicted_measurement, predicted_hypothesis.innovation_matrix);
-            const auto state = predicted_hypothesis.hypothesis.state + predicted_hypothesis.kalman_gain * (measurement.value - predicted_hypothesis.predicted_measurement);
-            const auto covariance = predicted_hypothesis.hypothesis.covariance;
+            const auto predicted_measurement = calibrations_.observation_matrix * predicted_hypothesis.state;
+            const auto predicted_covariance = measurement.covariance + calibrations_.observation_matrix * predicted_hypothesis.covariance * calibrations_.observation_matrix.transpose();
+            const auto weight = calibrations_.pd * predicted_hypothesis.weight * NormPdf(measurement.value, predicted_measurement, predicted_covariance);
             Z += weight;
+            const auto innovation = measurement.value - calibrations_.observation_matrix * predicted_hypothesis.state;
+            const auto innovation_covariance = measurement.covariance + calibrations_.observation_matrix * predicted_hypothesis.covariance * calibrations_.observation_matrix.transpose();
+            const auto kalman_gain = predicted_hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
+            const auto state = predicted_hypothesis.state + kalman_gain * innovation;
+            const auto covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * predicted_hypothesis.covariance;
             new_hypothesises.push_back(Hypothesis(weight, state, covariance));
+            max_weight = std::max(max_weight, weight);
           }
           for (auto & hypothesis : new_hypothesises)
           {
@@ -177,35 +176,51 @@ namespace mot {
 
       bool SelectMergeSet(std::vector<merge_candidate_t>& candidates)
       {
-          auto unmerged_candidates = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::unmerged;});
-          if (std::ranges::empty(unmerged_candidates))
-            return false;
-          const auto maximum_weight_hypothesis = *std::ranges::max_element(
-            unmerged_candidates,
-            [](const auto& a, const auto& b) {
-              return a.first.weight < b.first.weight;
-            }
-          );
+        auto merge_center = SelectMergeCenter(candidates);
+        if (!merge_center)
+          return false;
+        MarkMergeSet(candidates, *merge_center);
+        return true;
+      }
 
-          for (auto& [hypothesis, mark] : unmerged_candidates)
-          {
-            const auto diff = hypothesis.state - maximum_weight_hypothesis.first.state;
-            const auto distance_matrix = diff.transpose() * hypothesis.covariance.inverse() * diff;
-            if (distance_matrix(0) < calibrations_.merging_threshold)
-              mark = merging_state_t::merging;
+      std::optional<StateSizeVector> SelectMergeCenter(std::vector<merge_candidate_t>& candidates)
+      {
+        auto unmerged_candidates = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::unmerged;});
+        if (std::ranges::empty(unmerged_candidates))
+          return std::nullopt;
+        auto imax = std::ranges::max_element(
+          unmerged_candidates,
+          [](const auto& a, const auto& b) {
+            return a.first.weight < b.first.weight;
           }
-          return true;
+        );
+        imax->second = merging_state_t::merging;
+        return imax->first.state;        
+      }
+
+      void MarkMergeSet(std::vector<merge_candidate_t>& candidates, StateSizeVector merge_center)
+      {
+        auto unmerged_candidates = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::unmerged;});
+        for (auto& [hypothesis, mark] : unmerged_candidates)
+        {
+          const auto diff = hypothesis.state - merge_center;
+          const auto distance_matrix = diff.transpose() * hypothesis.covariance.inverse() * diff;
+          if (distance_matrix(0) < calibrations_.merging_threshold)
+            mark = merging_state_t::merging;
+        };
       }
 
       Hypothesis MergeSelected(std::vector<merge_candidate_t>& candidates)
       {
         auto merge_set = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::merging;});
-        double merged_weight = 0;
-        for (auto& [hypothesis, mark] : merge_set)
-          merged_weight += hypothesis.weight;          
+        float_type_t merged_weight = 0;
         StateSizeVector merged_state = StateSizeVector::Zero();
         for (auto& [hypothesis, mark] : merge_set)
-          merged_state += (hypothesis.weight * hypothesis.state) / merged_weight;
+        {
+          merged_weight += hypothesis.weight;
+          merged_state += hypothesis.weight * hypothesis.state;
+        }
+        merged_state /= merged_weight;
         StateSizeMatrix merged_covariance = StateSizeMatrix::Zero();
         for (auto& [hypothesis, mark] : merge_set)
         {
@@ -234,14 +249,14 @@ namespace mot {
         }
       }
 
-      static double NormPdf(const MeasurementSizeVector & z, const MeasurementSizeVector & nu, const MeasurementSizeMatrix & cov) {
+      static float_type_t NormPdf(const MeasurementSizeVector & z, const MeasurementSizeVector & nu, const MeasurementSizeMatrix & cov) {
         const auto diff = z - nu;
         const auto c = 1.0 / (std::sqrt(std::pow(std::numbers::pi, measurement_size) * cov.determinant()));
         const auto e = std::exp(-0.5 * diff.transpose() * cov.inverse() * diff);
         return c * e;
       }
 
-      double prev_timestamp_ = 0.0;
+      float_type_t prev_timestamp_ = 0.0;
       std::vector<Object> objects_;
       std::vector<Hypothesis> hypothesis_;
   };

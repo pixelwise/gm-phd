@@ -41,31 +41,8 @@ namespace mot {
 
   void EtGmPhdCvPose::PrepareProcessNoiseMatrix(void) {
     process_noise_covariance_matrix_ = StateSizeMatrix::Zero();
-
-    for (auto index = 0u; index < calibrations_.process_noise_diagonal.size(); index++)
-      process_noise_covariance_matrix_(index, index) = calibrations_.process_noise_diagonal.at(index);
+    for (size_t i = 0; i < 4; ++i)
+      process_noise_covariance_matrix_(i, i) = calibrations_.process_noise_diagonal(i);
   }
 
-  void EtGmPhdCvPose::PredictBirths(void) {
-    constexpr auto birth_objects_number = 100u;
-    for (auto index = 0; index < birth_objects_number; index++) {
-      Hypothesis birth_hypothesis;
-
-      birth_hypothesis.weight = 2.0 / static_cast<double>(birth_objects_number);
-
-      birth_hypothesis.state(0u) = pose_dist(e) * calibrations_.init_pose_range_spread(0) + calibrations_.init_pose_range_mean(0);
-      birth_hypothesis.state(1u) = pose_dist(e) * calibrations_.init_pose_range_spread(1) + calibrations_.init_pose_range_mean(1);
-      birth_hypothesis.state(2u) = velocity_dist(e);
-      birth_hypothesis.state(3u) = velocity_dist(e);
-
-      birth_hypothesis.covariance = calibrations_.init_state_covariance.asDiagonal();
-
-      const auto predicted_measurement = calibrations_.observation_matrix * birth_hypothesis.state;
-      const auto innovation_covariance = calibrations_.measurement_covariance + calibrations_.observation_matrix * birth_hypothesis.covariance * calibrations_.observation_matrix.transpose();
-      const auto kalman_gain = birth_hypothesis.covariance * calibrations_.observation_matrix.transpose() * innovation_covariance.inverse();
-      const auto predicted_covariance = (StateSizeMatrix::Identity() - kalman_gain * calibrations_.observation_matrix) * birth_hypothesis.covariance;
-
-      predicted_hypothesis_.push_back(birth_hypothesis);
-    }
-  }
 } // namespace mot

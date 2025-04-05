@@ -8,20 +8,16 @@
 namespace mot {
   template <size_t state_size, size_t measurement_size>
   struct GmPhdCalibrations {
-    std::array<double, state_size> process_noise_diagonal = {};                 // Process noise covariance matrix
+    Eigen::Vector<float, state_size> process_noise_diagonal = {};                 // Process noise covariance matrix
 
-    Eigen::Matrix<double, measurement_size, state_size> observation_matrix;     // Observation matrix
-    Eigen::Matrix<double, measurement_size, measurement_size> measurement_covariance;
+    Eigen::Matrix<float, measurement_size, state_size> observation_matrix;     // Observation matrix
 
-    double pd = 0.8;                                                       // Probability of detection
-    double ps = 0.8;                                                        // Probability of survival
-    double kappa = 1.0e-9;
+    float pd = 0.8;                                                       // Probability of detection
+    float ps = 0.8;                                                        // Probability of survival
+    float kappa = 1.0e-9;
 
-    double truncation_threshold = 0.1;
-    double merging_threshold = 3.0;
-    Eigen::Vector<double, measurement_size> init_pose_range_mean = {0, 0};
-    Eigen::Vector<double, measurement_size> init_pose_range_spread = {10, 10};
-    Eigen::Vector<double, state_size> init_state_covariance = {1, 1, 1, 1};
+    float truncation_threshold = 0.1;
+    float merging_threshold = 3.0;
   };
 } //  namespace mot
 
