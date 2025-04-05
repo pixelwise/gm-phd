@@ -132,7 +132,7 @@ namespace mot {
 
       void PredictExistingTargets(double time_delta)
       {
-        PrepareTransitionMatrix();
+        PrepareTransitionMatrix(time_delta);
         PrepareProcessNoiseMatrix();
         for (auto& hypothesis : hypothesis_)
           AddPredictedHypothesis(PredictHypothesis(hypothesis, time_delta));
@@ -148,11 +148,11 @@ namespace mot {
       }
 
       Hypothesis PredictHypothesis(const Hypothesis & hypothesis, double time_delta) {
-        static Hypothesis predicted_hypothesis;
-        predicted_hypothesis.weight = calibrations_.ps * hypothesis.weight;
-        predicted_hypothesis.state = transition_matrix_ * hypothesis.state;
-        predicted_hypothesis.covariance = transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose() + time_delta * process_noise_covariance_matrix_;
-        return predicted_hypothesis;
+        return Hypothesis{
+          calibrations_.ps * hypothesis.weight,
+          transition_matrix_ * hypothesis.state,
+          transition_matrix_ * hypothesis.covariance * transition_matrix_.transpose() + time_delta * process_noise_covariance_matrix_
+        };
       }
 
       void UpdateExistedHypothesis(void) {
