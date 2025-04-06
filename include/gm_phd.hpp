@@ -153,6 +153,7 @@ namespace mot {
             if (p > 1e-10)
               H -= p * std::log(p);
             weight /= calibrations_.kappa + Z;
+            // p_clutter = 1 - Z / (kappa + Z) = kappa / (kappa + Z)
             if (weight > calibrations_.truncation_threshold)
             {
               n_assigned++;
@@ -160,7 +161,7 @@ namespace mot {
               hypothesises_.push_back(KalmanUpdatedHypothesis(prediction, measurement, weight));
             }
           }
-          std::cerr << "measurement assignment entropy " << H << " <n> " << std::exp(H) << " n " << n_assigned << std::endl;
+          std::cerr << "measurement assignment entropy " << H << " <n> " << std::exp(H) << " n " << n_assigned << " p_clutter " << (calibrations_.kappa / (calibrations_.kappa + Z)) << std::endl;
         }
       }
 
@@ -168,7 +169,7 @@ namespace mot {
       {
         const auto predicted_measurement = calibrations_.observation_matrix * prediction.state;
         const auto predicted_covariance = measurement.covariance + calibrations_.observation_matrix * prediction.covariance * calibrations_.observation_matrix.transpose();
-        const auto weight = calibrations_.pd * prediction.weight * NormPdf(measurement.value, predicted_measurement, predicted_covariance);        
+        return calibrations_.pd * prediction.weight * NormPdf(measurement.value, predicted_measurement, predicted_covariance);        
       }
 
       Hypothesis KalmanUpdatedHypothesis(const Hypothesis& prediction, const Measurement& measurement, float weight) const
@@ -185,9 +186,9 @@ namespace mot {
       {
         auto merge_candidates = GetMergeCandidates();
         hypothesises_.clear();
-        while (SelectMergeSet(merge_candidates))
+        while (auto merge_center = SelectMergeSet(merge_candidates))
         {
-          hypothesises_.push_back(MergeSelected(merge_candidates));
+          hypothesises_.push_back(MergeSelected(merge_candidates, *merge_center));
           MarkMerged(merge_candidates);
         }
         std::cerr << "merged " << merge_candidates.size() << " -> " << hypothesises_.size() << std::endl;
@@ -202,16 +203,15 @@ namespace mot {
         return merge_candidates;
       }
 
-      bool SelectMergeSet(std::vector<merge_candidate_t>& candidates)
+      std::optional<Hypothesis> SelectMergeSet(std::vector<merge_candidate_t>& candidates)
       {
         auto merge_center = SelectMergeCenter(candidates);
-        if (!merge_center)
-          return false;
-        MarkMergeSet(candidates, *merge_center);
-        return true;
+        if (merge_center)
+          MarkMergeSet(candidates, *merge_center);
+        return merge_center;;
       }
 
-      std::optional<StateSizeVector> SelectMergeCenter(std::vector<merge_candidate_t>& candidates)
+      std::optional<Hypothesis> SelectMergeCenter(std::vector<merge_candidate_t>& candidates)
       {
         auto unmerged_candidates = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::unmerged;});
         if (std::ranges::empty(unmerged_candidates))
@@ -223,39 +223,48 @@ namespace mot {
           }
         );
         imax->second = merging_state_t::merging;
-        return imax->first.state;        
+        return imax->first;        
       }
 
-      void MarkMergeSet(std::vector<merge_candidate_t>& candidates, StateSizeVector merge_center)
+      void MarkMergeSet(std::vector<merge_candidate_t>& candidates, const Hypothesis& merge_center)
       {
         auto unmerged_candidates = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::unmerged;});
         for (auto& [hypothesis, mark] : unmerged_candidates)
         {
-          const auto diff = hypothesis.state - merge_center;
+          const auto diff = hypothesis.state - merge_center.state;
           const auto distance_matrix = diff.transpose() * hypothesis.covariance.inverse() * diff;
           if (distance_matrix(0) < calibrations_.merging_threshold)
             mark = merging_state_t::merging;
         };
       }
 
-      Hypothesis MergeSelected(std::vector<merge_candidate_t>& candidates)
+      Hypothesis MergeSelected(std::vector<merge_candidate_t>& candidates, const Hypothesis& merge_center)
       {
-        auto merge_set = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::merging;});
-        float_type_t merged_weight = 0;
-        StateSizeVector merged_state = StateSizeVector::Zero();
-        for (auto& [hypothesis, mark] : merge_set)
-        {
-          merged_weight += hypothesis.weight;
-          merged_state += hypothesis.weight * hypothesis.state;
+        switch (calibrations_.merge_mode) {
+        case merge_mode_t::absorb:
+          {
+            return merge_center;
+          }
+        case merge_mode_t::moment_match:
+          {
+            auto merge_set = candidates | std::views::filter([](auto& candidate) {return candidate.second == merging_state_t::merging;});
+            float_type_t merged_weight = 0;
+            StateSizeVector merged_state = StateSizeVector::Zero();
+            for (auto& [hypothesis, mark] : merge_set)
+            {
+              merged_weight += hypothesis.weight;
+              merged_state += hypothesis.weight * hypothesis.state;
+            }
+            merged_state /= merged_weight;
+            StateSizeMatrix merged_covariance = StateSizeMatrix::Zero();
+            for (auto& [hypothesis, mark] : merge_set)
+            {
+              const auto diff = merged_state - hypothesis.state;
+              merged_covariance += (hypothesis.covariance + diff * diff.transpose()) / merged_weight;
+            }
+            return Hypothesis(merged_weight, merged_state, merged_covariance);            
+          }
         }
-        merged_state /= merged_weight;
-        StateSizeMatrix merged_covariance = StateSizeMatrix::Zero();
-        for (auto& [hypothesis, mark] : merge_set)
-        {
-          const auto diff = merged_state - hypothesis.state;
-          merged_covariance += (hypothesis.covariance + diff * diff.transpose()) / merged_weight;
-        }
-        return Hypothesis(merged_weight, merged_state, merged_covariance);
       }
 
       void MarkMerged(std::vector<merge_candidate_t>& candidates)

@@ -6,6 +6,7 @@
 #include <Eigen/Dense>
 
 namespace mot {
+  enum class merge_mode_t {moment_match, absorb};
   template <size_t state_size, size_t measurement_size>
   struct GmPhdCalibrations {
     Eigen::Vector<float, state_size> process_noise_diagonal = {};                 // Process noise covariance matrix
@@ -19,6 +20,8 @@ namespace mot {
     float truncation_threshold = 0.1;
     float merging_threshold = 3.0;
     float extraction_threshold = 3.0;
+
+    merge_mode_t merge_mode = merge_mode_t::absorb;
   };
 } //  namespace mot
 
