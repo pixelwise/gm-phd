@@ -131,6 +131,10 @@ namespace mot {
         }
       }
 
+// todo: adaptive birth model along "Adaptive target birth intensity for PHD and CPHD filters"
+//       which just means (in simple case) to have a value l that is added to  weight denominator
+//       and used as numerator against the same denominator for a birth hypothesis
+//       effectively this is a soft threshold above which measurements spawn new hypos
       void MakeMeasurementUpdate(const std::vector<Measurement> & measurements) {
         std::vector<Hypothesis> new_hypothesises;
         const size_t n = predicted_hypothesis_.size();
@@ -152,7 +156,10 @@ namespace mot {
             auto p = double(weight) / Z;
             if (p > 1e-10)
               H -= p * std::log(p);
-            weight /= calibrations_.kappa + Z;
+            // todo: add measurement weight and multiply detection ad birth hypo with it
+            auto denom = calibrations_.kappa + calibrations_.lambda + Z;
+            weight /= denom;
+            auto w_birth = calibrations_.lambda / denom;
             // p_clutter = 1 - Z / (kappa + Z) = kappa / (kappa + Z)
             if (weight > calibrations_.truncation_threshold)
             {
@@ -160,6 +167,12 @@ namespace mot {
               auto& prediction = predicted_hypothesis_[i];
               hypothesises_.push_back(KalmanUpdatedHypothesis(prediction, measurement, weight));
             }
+            // todo: initial covariance over unobserved variables
+            // if (w_birth > calibrations_.truncation_threshold)
+            // {
+            //   n_assigned++;
+            //   Spawn()
+            // }
           }
           std::cerr << "measurement assignment entropy " << H << " <n> " << std::exp(H) << " n " << n_assigned << " p_clutter " << (calibrations_.kappa / (calibrations_.kappa + Z)) << std::endl;
         }

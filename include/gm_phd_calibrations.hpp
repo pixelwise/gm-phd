@@ -16,6 +16,7 @@ namespace mot {
     float pd = 0.8;                                                       // Probability of detection
     float ps = 0.8;                                                        // Probability of survival
     float kappa = 1.0e-9;
+    float lambda = 1.0e-5; // birth measurement likelihood threshold
 
     float truncation_threshold = 0.1;
     float merging_threshold = 3.0;
